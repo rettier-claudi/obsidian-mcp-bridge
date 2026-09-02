@@ -1,0 +1,9 @@
+node_modules/
+# main.js is deliberately NOT ignored: deployment to the headless Obsidian
+# containers is "copy three files into .obsidian/plugins/mcp-bridge/", so the
+# built bundle is committed alongside manifest.json and styles.css.
+main.js.map
+*.tgz
+test/.smoke.cjs
+.DS_Store
+data.json
