@@ -158,10 +158,11 @@ curl -s http://mike:27125/mcp \
   "line_number": 3,
   "line_before": "- [ ] tDCS-Sitzung 🔁 every day 📅 2026-09-02 ^t-abcd",
   "lines_after": [
-    "- [ ] tDCS-Sitzung 🔁 every day 📅 2026-09-03",
+    "- [ ] tDCS-Sitzung 🔁 every day 📅 2026-09-03 ^t-91fe",
     "- [x] tDCS-Sitzung 🔁 every day 📅 2026-09-02 ✅ 2026-09-02 ^t-abcd"
   ],
   "recurrence_created": true,
+  "anchor_added": "t-91fe",
   "changed": true,
   "command_id": "obsidian-tasks-plugin:toggle-done"
 }
@@ -206,16 +207,21 @@ an existing target.
 
 ## Behaviour worth knowing
 
-- **The new recurrence instance has no block anchor.** Tasks explicitly sets
-  `blockLink: ''` on the next occurrence ("New occurrences cannot have the same
-  block link"). So a caller that tracks tasks by `^t-xxxx` will find the anchor on
-  the *completed* line and nothing on the new open one — it has to mint a fresh
-  anchor itself if it wants to track the follow-up. `lines_after` in the response
-  contains both lines so the caller can do that.
-- **The line ordering depends on user settings.** Tasks uses
-  `toggleWithRecurrenceInUsersOrder()`; whether the new instance lands above or
-  below the completed one is a Tasks setting, not something this plugin controls.
-  Do not assume an order — read `lines_after`.
+- **The new recurrence instance gets a fresh block anchor from this plugin, not
+  from Tasks.** Tasks itself sets `blockLink: ''` on the next occurrence ("New
+  occurrences cannot have the same block link"), so the completed line keeps the
+  original `^t-xxxx` and the new open line would otherwise have none —
+  unaddressable by anchor, invisible to anything (like `tasks.py`) that tracks
+  tasks by id. This plugin finds that line — the one still open (`[ ]`) and
+  without a trailing anchor — and mints and appends a new `t-xxxx` id in the same
+  format `tasks.py`'s own `neue_id()` uses, checked for collisions against the
+  live buffer plus `tasks/offen.md`, `tasks/einkauf.md`, `tasks/erledigt.md`. The
+  minted id comes back as `anchor_added` (`null` if nothing new was created).
+- **The line ordering depends on user settings**, so the anchor logic does not
+  assume a position. Tasks uses `toggleWithRecurrenceInUsersOrder()`; whether the
+  new instance lands above or below the completed one is a Tasks setting. The
+  new-occurrence line is identified by being open and unanchored, wherever it
+  landed — read `lines_after` if the caller needs to know the order too.
 - **Non-task lines are refused.** Tasks' toggle command will happily convert a
   plain text line into a checklist item. This plugin checks the target line looks
   like `- [ ] ...` first and errors out otherwise, so a mis-addressed call cannot
@@ -254,12 +260,19 @@ Nothing here has run against a real Obsidian yet. In rough order of risk:
    Tasks yet, so all settings are defaults (`removeScheduledDateOnRecurrence:
    false`). Complete one real `🔁` task and check `lines_after` has two entries
    and the dates rolled forward as expected.
-5. **Does `view.save()` land before the caller reads the file?** It is awaited,
+5. **Confirm the minted anchor round-trips correctly.** The anchor-adding step
+   (`editor.setLine` on the still-open, unanchored line, then `view.save()`) is
+   only exercised against the stub. On a real recurrence, check `anchor_added`
+   is set, the corresponding line in the saved file on disk actually carries it,
+   and that `tasks.py`'s own `ID_RE`/`TASK_RE` accept the resulting line
+   unchanged (no stray double space, no anchor before other trailing fields it
+   expects last).
+6. **Does `view.save()` land before the caller reads the file?** It is awaited,
    but confirm against `fast-note-sync` — a save and a sync write racing on the
    same file is exactly the shape of the earlier task-loss incident.
-6. **Port reachability.** The port has to be published from the Obsidian
+7. **Port reachability.** The port has to be published from the Obsidian
    container, and the `obsidian-docker` image/compose does not do that yet.
-7. **Restart survival.** Confirm the listener comes back after an Obsidian restart
+8. **Restart survival.** Confirm the listener comes back after an Obsidian restart
    inside the container, and that a stale listener does not block the port
    (`EADDRINUSE` shows up as "not running — ..." in the settings tab).
 

@@ -19,6 +19,46 @@ import { App, MarkdownView, TFile, TFolder, WorkspaceLeaf, normalizePath } from 
 /** A line that Tasks would recognise as a checklist item: `- [ ] ...`, `* [x] ...`, `1. [ ] ...`. */
 const TASK_LINE = /^[\s>]*(?:[-*+]|\d+\.)\s+\[.\]/;
 
+/**
+ * Tasks' own toggle clears the block link on a freshly-created recurring
+ * occurrence ("New occurrences cannot have the same block link") — the
+ * completed line keeps the original `^t-xxxx`, the new open line gets none.
+ * That breaks tasks.py, whose whole model is "an id names exactly one line";
+ * an anchor-less task is invisible to `done`, `defer`, `plan`, etc. So this
+ * mints a fresh id in the same format tasks.py's own `neue_id()` uses and
+ * appends it, checked against the same three files tasks.py itself checks.
+ */
+const ANCHOR_ID_RE = /\^t-([0-9a-f]{4})\b/g;
+const TRAILING_ANCHOR_RE = /\^[\w-]+\s*$/;
+const TASK_FILES = ['tasks/offen.md', 'tasks/einkauf.md', 'tasks/erledigt.md'];
+
+async function collectTaskAnchorIds(app: App, currentPath: string, currentBuffer: string): Promise<Set<string>> {
+    const ids = new Set<string>();
+    const scan = (text: string) => {
+        for (const m of text.matchAll(ANCHOR_ID_RE)) ids.add(m[1]);
+    };
+    // The file being edited may hold unsaved changes (the new occurrence line
+    // itself), so read its live buffer rather than the disk copy.
+    scan(currentBuffer);
+    for (const rel of TASK_FILES) {
+        const path = normalizePath(rel);
+        if (path === normalizePath(currentPath)) continue;
+        const af = app.vault.getAbstractFileByPath(path);
+        if (af instanceof TFile) scan(await app.vault.read(af));
+    }
+    return ids;
+}
+
+function mintAnchorId(taken: Set<string>): string {
+    let id: string;
+    do {
+        id = Math.floor(Math.random() * 0x10000)
+            .toString(16)
+            .padStart(4, '0');
+    } while (taken.has(id));
+    return `t-${id}`;
+}
+
 export class ActionError extends Error {}
 
 export interface CompleteTaskArgs {
@@ -34,6 +74,7 @@ export interface CompleteTaskResult {
     line_before: string;
     lines_after: string[];
     recurrence_created: boolean;
+    anchor_added: string | null;
     changed: boolean;
     command_id: string;
 }
@@ -209,6 +250,29 @@ export async function completeTask(
 
     const after = editor.getValue().split('\n');
     const grew = Math.max(0, after.length - before.length);
+
+    // Which of the two lines is the new occurrence and which is the completed
+    // one is a Tasks *setting* (toggleWithRecurrenceInUsersOrder), not a fixed
+    // position — do not assume the new one comes first. Find it instead by what
+    // it is: still open (`[ ]`) and, because Tasks clears blockLink on it,
+    // without a trailing anchor yet. There is exactly one such line per toggle.
+    let anchorAdded: string | null = null;
+    if (grew > 0) {
+        for (let i = lineIdx; i <= lineIdx + grew; i++) {
+            const candidate = after[i];
+            const isOpenTask = /^[\s>]*(?:[-*+]|\d+\.)\s+\[ \]/.test(candidate);
+            if (isOpenTask && !TRAILING_ANCHOR_RE.test(candidate)) {
+                const taken = await collectTaskAnchorIds(app, file.path, editor.getValue());
+                const anchor = mintAnchorId(taken);
+                const withAnchor = `${candidate.replace(/\s+$/, '')} ^${anchor}`;
+                editor.setLine(i, withAnchor);
+                after[i] = withAnchor;
+                anchorAdded = anchor;
+                break;
+            }
+        }
+    }
+
     const linesAfter = after.slice(lineIdx, lineIdx + 1 + grew);
 
     // Flush to disk right away: callers (tasks.py, n8n) read the file next, and
@@ -221,6 +285,7 @@ export async function completeTask(
         line_before: lineBefore,
         lines_after: linesAfter,
         recurrence_created: grew > 0,
+        anchor_added: anchorAdded,
         changed: after.length !== before.length || after[lineIdx] !== before[lineIdx],
         command_id: commandId,
     };

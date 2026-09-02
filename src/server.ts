@@ -35,8 +35,10 @@ const TOOLS = [
             'Tick off a Tasks-plugin checklist item in the vault by running Obsidian\'s own ' +
             '"Toggle task done" command on it. Sets [x] and the ✅ done date, and — for a ' +
             'recurring task (🔁) — inserts the next open occurrence, which no external ' +
-            'regex edit can do. Identify the line by block anchor (preferred), unique text, ' +
-            'or line number.',
+            'regex edit can do. Tasks strips the block anchor from that new occurrence; this ' +
+            'tool mints and appends a fresh ^t-xxxx id in tasks.py\'s own format so the new ' +
+            'line stays addressable (see anchor_added in the result). Identify the line by ' +
+            'block anchor (preferred), unique text, or line number.',
         inputSchema: {
             type: 'object',
             properties: {

@@ -26,6 +26,9 @@ export class Editor {
     getLine(i: number) {
         return this.lines[i];
     }
+    setLine(i: number, text: string) {
+        this.lines[i] = text;
+    }
     lineCount() {
         return this.lines.length;
     }

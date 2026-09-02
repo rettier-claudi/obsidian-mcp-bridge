@@ -31,6 +31,7 @@ const files: Record<string, string> = {
         '- [ ] tDCS-Sitzung 🔁 every day 📅 2026-09-02 ^t-abcd',
         '- [ ] Milch kaufen ^t-beef',
         'kein Task, nur Text ^t-dead',
+        '- [ ] Blutdruck messen 🔁 every day 📅 2026-09-02 ^t-cafe',
         '',
     ].join('\n'),
     'Notizen/alt.md': '# Alt\n',
@@ -63,15 +64,22 @@ const app: any = {
         },
     },
     commands: {
-        // Stands in for obsidian-tasks-plugin:toggle-done, including the bit that
-        // matters most: a recurring task grows into two lines.
+        // Stands in for obsidian-tasks-plugin:toggle-done, including the bits that
+        // matter most: a recurring task grows into two lines, the real plugin
+        // clears the block link on the new occurrence ("New occurrences cannot
+        // have the same block link"), and — per toggleWithRecurrenceInUsersOrder()
+        // — which of the two comes first is a Tasks *setting*, not a constant. The
+        // "Blutdruck" line exercises the done-first order to prove the anchor logic
+        // does not assume a position.
         executeCommandById: (id: string) => {
             if (id !== DEFAULT_SETTINGS.toggleDoneCommandId) return false;
             const editor: Editor = (leaf.view as MarkdownView).editor;
             editor.applyToggle((line) => {
                 if (line.includes('🔁')) {
-                    return [line.replace('- [ ]', '- [ ]').replace('📅 2026-09-02', '📅 2026-09-03'),
-                        line.replace('- [ ]', '- [x]') + ' ✅ 2026-09-02'];
+                    const withoutAnchor = line.replace(/\s*\^[\w-]+\s*$/, '');
+                    const nextOpen = withoutAnchor.replace('- [ ]', '- [ ]').replace('📅 2026-09-02', '📅 2026-09-03');
+                    const done = line.replace('- [ ]', '- [x]') + ' ✅ 2026-09-02';
+                    return line.includes('Blutdruck') ? [done, nextOpen] : [nextOpen, done];
                 }
                 return [line.replace('- [ ]', '- [x]') + ' ✅ 2026-09-02'];
             });
@@ -174,6 +182,19 @@ async function main() {
     check('complete_task reports the recurrence line', recBody.recurrence_created === true && recBody.lines_after?.length === 2, recBody);
     check('complete_task reports 1-based line number', recBody.line_number === 3, recBody);
     check('complete_task saved the file', (leaf.view as MarkdownView).saved === true);
+    check(
+        'a fresh, unused anchor is minted for the new occurrence',
+        typeof recBody.anchor_added === 'string' &&
+            /^t-[0-9a-f]{4}$/.test(recBody.anchor_added) &&
+            !['t-abcd', 't-beef', 't-dead'].includes(recBody.anchor_added),
+        recBody,
+    );
+    check(
+        'the new occurrence line carries the minted anchor, the done line keeps the original',
+        recBody.lines_after?.[0]?.endsWith(`^${recBody.anchor_added}`) &&
+            recBody.lines_after?.[1]?.includes('^t-abcd'),
+        recBody,
+    );
 
     const plain = await rpc({
         jsonrpc: '2.0',
@@ -184,6 +205,22 @@ async function main() {
     const plainBody = payload(plain);
     check('anchor accepts a leading ^', plainBody.ok === true, plainBody);
     check('non-recurring task creates nothing', plainBody.recurrence_created === false, plainBody);
+    check('no anchor is minted when nothing new was created', plainBody.anchor_added === null, plainBody);
+
+    const recReversed = await rpc({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: { name: 'complete_task', arguments: { path: 'Aufgaben/geplant.md', anchor: 't-cafe' } },
+    });
+    const recReversedBody = payload(recReversed);
+    check(
+        'anchor is minted on the new occurrence even when Tasks puts the done line first',
+        typeof recReversedBody.anchor_added === 'string' &&
+            recReversedBody.lines_after?.[0]?.includes('^t-cafe') &&
+            recReversedBody.lines_after?.[1]?.endsWith(`^${recReversedBody.anchor_added}`),
+        recReversedBody,
+    );
 
     const notATask = await rpc({
         jsonrpc: '2.0',
