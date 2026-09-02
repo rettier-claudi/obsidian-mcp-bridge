@@ -7,7 +7,7 @@ export interface McpBridgeSettings {
     /** Interface to bind to. 127.0.0.1 keeps it host-local; 0.0.0.0 exposes it to the container network. */
     host: string;
     port: number;
-    /** Shared secret. Every request must send `Authorization: Bearer <token>`. */
+    /** Shared secret. Every request must send it as `X-Bridge-Token: <token>`. */
     token: string;
     /**
      * Command id of the Tasks plugin's "Toggle task done". Configurable so a live
@@ -84,10 +84,11 @@ export class McpBridgeSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('Bearer token')
+            .setName('Access token')
             .setDesc(
-                'Every request must send this as "Authorization: Bearer <token>". ' +
-                    'Without a token the server refuses to start — this endpoint can rename files and edit tasks.',
+                'A plain shared secret, not OAuth — every request must send this as ' +
+                    '"X-Bridge-Token: <token>". Without a token the server refuses to start — ' +
+                    'this endpoint can rename files and edit tasks.',
             )
             .addText((t) => {
                 t.inputEl.type = 'password';

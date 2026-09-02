@@ -27,6 +27,8 @@ import type { McpBridgeSettings } from './settings';
 
 const SERVER_NAME = 'obsidian-mcp-bridge';
 const SERVER_VERSION = '0.1.0';
+// Node lower-cases incoming header names.
+const TOKEN_HEADER = 'x-bridge-token';
 
 const TOOLS = [
     {
@@ -139,10 +141,9 @@ function ok(result: unknown) {
     return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, ...(result as object) }, null, 2) }] };
 }
 
-function tokenMatches(expected: string, header: string | undefined): boolean {
-    if (!header) return false;
-    const presented = header.startsWith('Bearer ') ? header.slice(7).trim() : header.trim();
-    const a = Buffer.from(presented);
+function tokenMatches(expected: string, presented: string | string[] | undefined): boolean {
+    if (typeof presented !== 'string' || !presented) return false;
+    const a = Buffer.from(presented.trim());
     const b = Buffer.from(expected);
     // Length differences leak through the early return, which tells an attacker
     // the token length and nothing else; that is the standard trade-off here.
@@ -189,7 +190,7 @@ export class BridgeHttpServer {
     async start(): Promise<void> {
         if (this.http) await this.stop();
         if (!this.settings.token) {
-            throw new Error('No bearer token set — refusing to expose the vault unauthenticated.');
+            throw new Error('No token set — refusing to expose the vault unauthenticated.');
         }
 
         const http = createServer((req, res) => {
@@ -234,9 +235,15 @@ export class BridgeHttpServer {
             return;
         }
 
-        if (!tokenMatches(this.settings.token, req.headers.authorization)) {
-            res.setHeader('WWW-Authenticate', 'Bearer');
-            sendJson(res, 401, { error: 'Missing or invalid bearer token' });
+        // A plain shared-secret header, deliberately not `Authorization: Bearer` +
+        // `WWW-Authenticate`. That pair is the specific signal the MCP
+        // authorization spec uses to tell a compliant client "do OAuth discovery
+        // here" — which this server does not implement, does not want to answer
+        // for, and does not want a client attempting over the network for a
+        // vault-local tool. A private, static pre-shared token needs none of that
+        // machinery.
+        if (!tokenMatches(this.settings.token, req.headers[TOKEN_HEADER])) {
+            sendJson(res, 401, { error: `Missing or invalid token (expected header: ${TOKEN_HEADER})` });
             return;
         }
 

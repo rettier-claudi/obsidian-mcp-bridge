@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Smoke test for everything that does not need a real Obsidian: the HTTP front
- * door, the bearer check, the MCP handshake, the tool list, argument validation
+ * door, the token check, the MCP handshake, the tool list, argument validation
  * and line resolution.
  *
  * Run with: npm run test:smoke
@@ -106,7 +106,7 @@ async function rpc(
         'Content-Type': 'application/json',
         Accept: accept,
     };
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token) headers['X-Bridge-Token'] = token;
     const res = await fetch(`http://127.0.0.1:${PORT}${path}`, {
         method,
         headers,

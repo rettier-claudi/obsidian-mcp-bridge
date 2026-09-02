@@ -40,7 +40,7 @@ a remote shell over the vault.
 
 ```
 tasks.py / n8n / a Claude session
-        │  POST /mcp   (MCP Streamable HTTP, Bearer token)
+        │  POST /mcp   (MCP Streamable HTTP, plain shared-secret header)
         ▼
 Obsidian plugin  →  app.commands.executeCommandById('obsidian-tasks-plugin:toggle-done')
                  →  app.fileManager.renameFile(...)
@@ -72,11 +72,19 @@ other hosts. Stateless mode with `enableJsonResponse`, so a caller can be a sing
 
 ### Security
 
-Every request to `/mcp` must carry `Authorization: Bearer <token>`, compared in
-constant time. The token lives in the plugin's `data.json` (Obsidian's normal place
-for plugin config), is generated on first load, and is shown/regenerable in the
-settings tab. It is deliberately **not** read from 1Password at runtime — in this
-homelab 1Password is a backup store, not a runtime secret source.
+Every request to `/mcp` must carry `X-Bridge-Token: <token>`, compared in constant
+time. Deliberately not `Authorization: Bearer` — that scheme, paired with a
+`WWW-Authenticate` response, is what the MCP authorization spec uses to tell a
+compliant client "go do OAuth discovery here." This server doesn't implement OAuth
+and doesn't want a client attempting it: a private, static pre-shared secret needs
+no authorization server, no discovery endpoint, no network round-trip beyond the
+request itself — fewer moving parts for a vault-local tool. A plain custom header
+keeps that intent unambiguous.
+
+The token lives in the plugin's `data.json` (Obsidian's normal place for plugin
+config), is generated on first load, and is shown/regenerable in the settings tab.
+It is deliberately **not** read from 1Password at runtime — in this homelab
+1Password is a backup store, not a runtime secret source.
 
 The plugin refuses to start the listener without a token. The default bind address
 is `0.0.0.0` because the point is cross-container access; set it to `127.0.0.1` if
@@ -119,7 +127,7 @@ same vault, otherwise `complete_task` fails with "Command ... did not run".
 
 ## Calling it
 
-Required headers: the bearer token, and `Accept: application/json,
+Required headers: the token, and `Accept: application/json,
 text/event-stream` — the Streamable HTTP spec requires both media types in
 `Accept` even though `enableJsonResponse` makes the answer plain JSON. Sending only
 `application/json` gets a **406**.
@@ -128,7 +136,7 @@ text/event-stream` — the Streamable HTTP spec requires both media types in
 
 ```bash
 curl -s http://mike:27125/mcp \
-  -H "Authorization: Bearer $OBSIDIAN_MCP_TOKEN" \
+  -H "X-Bridge-Token: $OBSIDIAN_MCP_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq
@@ -141,7 +149,7 @@ number:
 
 ```bash
 curl -s http://mike:27125/mcp \
-  -H "Authorization: Bearer $OBSIDIAN_MCP_TOKEN" \
+  -H "X-Bridge-Token: $OBSIDIAN_MCP_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{
@@ -175,7 +183,7 @@ import requests
 
 def call(tool, args, base="http://mike:27125/mcp", token=...):
     r = requests.post(base, timeout=30,
-        headers={"Authorization": f"Bearer {token}",
+        headers={"X-Bridge-Token": token,
                  "Accept": "application/json, text/event-stream"},
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
               "params": {"name": tool, "arguments": args}})
@@ -280,7 +288,7 @@ Nothing here has run against a real Obsidian yet. In rough order of risk:
 
 ```
 src/main.ts      plugin lifecycle, server start/stop
-src/server.ts    HTTP listener, bearer auth, MCP server + tool definitions
+src/server.ts    HTTP listener, token auth, MCP server + tool definitions
 src/actions.ts   the two vault operations
 src/settings.ts  settings tab
 test/            smoke test against a stubbed obsidian module
