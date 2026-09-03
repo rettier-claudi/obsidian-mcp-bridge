@@ -23,7 +23,9 @@ plugin's own command.
 
 **Renaming.** Obsidian's `fileManager.renameFile()` rewrites every `[[wikilink]]`
 and embed pointing at the file. A `mv` on disk, or `vault.rename()`, does not — it
-leaves dangling links. Our scripts have been doing the `mv`.
+leaves dangling links. Our scripts have been doing the `mv`. (It only rewrites
+links if the vault has "Automatically update internal links" on — see
+[below](#alwaysupdatelinks-is-a-hard-requirement-not-a-preference).)
 
 Both cases are the same shape: the correct behaviour already exists inside
 Obsidian, and the only thing missing was a way to reach it from outside.
@@ -106,7 +108,8 @@ host", not "run a build there".
 `npm run test:smoke` covers everything that does not need a real Obsidian (auth,
 routing, the MCP wire format, anchor/line resolution, the rename guards) against a
 stubbed `obsidian` module. It cannot cover the leaf-opening or the real Tasks
-command — see the TODOs below.
+command — those were checked by hand against the running instances, see
+[Verified live](#verified-live-2026-09-03).
 
 ## Install
 
@@ -119,11 +122,33 @@ command — see the TODOs below.
    (default `0.0.0.0:27125`).
 4. The listener starts on layout-ready. Check Settings → MCP Bridge, or run the
    command **"MCP Bridge: Show MCP server status"**, to confirm it is listening.
-5. Make sure the port is reachable from wherever the caller lives — in the
-   headless containers, the Obsidian container needs that port published.
+5. Make sure the port is reachable from wherever the caller lives. On macvlan
+   containers (the setup here) the container has its own LAN address and nothing
+   needs publishing; on bridge networking the port has to be published.
+6. **Turn on Settings → Files & Links → "Automatically update internal links"**
+   (`alwaysUpdateLinks: true` in `.obsidian/app.json`). This is not optional for
+   `rename_file` — see below.
 
 The Tasks plugin (`obsidian-tasks-plugin`) must be installed and enabled in the
 same vault, otherwise `complete_task` fails with "Command ... did not run".
+
+### `alwaysUpdateLinks` is a hard requirement, not a preference
+
+`app.fileManager.renameFile()` is documented as updating links "depending on the
+user's preferences". What the docs do not say is what happens when the preference
+is off: Obsidian asks, with a modal — and the promise `renameFile()` returned does
+not settle until somebody answers it. In a headless instance nobody ever does.
+
+Observed on both containers, 2026-09-03, with `app.json` at `{}` (default):
+the file **was** moved on disk, the `[[wikilinks]]` were **not** rewritten, and the
+HTTP request never returned (still hanging after 180 s). Worse, the unanswered
+modal blocks the next rename too, so every following `rename_file` hangs without
+doing anything, and one instance eventually died and was restarted by its
+supervisor. With `alwaysUpdateLinks: true` the same call returns in ~20 ms and
+rewrites plain links, aliased links and embeds.
+
+This is a settings fix, not a code fix, but it is invisible from the outside, so
+check it first if `rename_file` ever hangs again.
 
 ## Calling it
 
@@ -135,7 +160,7 @@ text/event-stream` — the Streamable HTTP spec requires both media types in
 ### List the tools
 
 ```bash
-curl -s http://mike:27125/mcp \
+curl -s http://obsidian.mike.graz.philipp.ninja:27125/mcp \
   -H "X-Bridge-Token: $OBSIDIAN_MCP_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -148,7 +173,7 @@ Identify the line by block anchor (preferred), unique text, or 1-based line
 number:
 
 ```bash
-curl -s http://mike:27125/mcp \
+curl -s http://obsidian.mike.graz.philipp.ninja:27125/mcp \
   -H "X-Bridge-Token: $OBSIDIAN_MCP_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -181,7 +206,7 @@ From Python:
 ```python
 import requests
 
-def call(tool, args, base="http://mike:27125/mcp", token=...):
+def call(tool, args, base="http://obsidian.mike.graz.philipp.ninja:27125/mcp", token=...):
     r = requests.post(base, timeout=30,
         headers={"X-Bridge-Token": token,
                  "Accept": "application/json, text/event-stream"},
@@ -241,48 +266,92 @@ an existing target.
 - The note stays open in a leaf afterwards. That is harmless in a headless
   instance, and keeps repeated calls on the same file fast.
 
-## Open TODOs — must be verified live (phase 2)
+## Verified live (2026-09-03)
 
-Nothing here has run against a real Obsidian yet. In rough order of risk:
+Everything below was checked against the two headless instances that run the
+plugin — `mike-obsidian` (`obsidian.mike.graz.philipp.ninja`, 192.0.0.238) and
+`claudi-obsidian` (192.0.0.245), both Obsidian 1.13.7, Tasks 8.3.0, both on
+macvlan with their own LAN address, port 27125. The test used a throwaway note
+with `🔁 every day` lines in `tasks.py`'s own format, not real tasks.
 
-1. **Does the leaf actually open and become the active editor under Xvfb?** The
-   whole design rests on `workspace.getLeaf()` + `openFile()` +
-   `setActiveLeaf({focus: true})` producing an editor that
-   `executeCommandById` will act on, in an instance nobody is looking at. If
-   `toggle-done` returns `true` but nothing changes, this is the suspect: the
-   command dispatched but found no active `MarkdownView`. The response's
-   `changed: false` is the signal.
-2. **Is the 50 ms wait after `openFile()` enough** for CodeMirror to attach on a
-   cold, headless start? If `complete_task` intermittently errors with "could not
-   open ... in a Markdown editor", raise it. It is a fixed sleep, which is the
-   crude solution; if it proves flaky, replace it with polling for
-   `view.editor` rather than just a longer sleep.
-3. **Confirm the command id on the installed version.** Built against
-   `obsidian-tasks-plugin` sources at tag `8.3.0` (the version on `mike-obsidian`)
-   and current `main`; both register `id: 'toggle-done'` inside
-   `src/Commands/index.ts`, which Obsidian namespaces to
-   `obsidian-tasks-plugin:toggle-done`. Verify in the running instance via the
-   command palette or `app.commands.commands` in the dev console. The id is a
-   plugin setting, so a mismatch is a settings fix, not a rebuild.
-4. **Confirm recurrence actually fires.** `mike-obsidian` has no `data.json` for
-   Tasks yet, so all settings are defaults (`removeScheduledDateOnRecurrence:
-   false`). Complete one real `🔁` task and check `lines_after` has two entries
-   and the dates rolled forward as expected.
-5. **Confirm the minted anchor round-trips correctly.** The anchor-adding step
-   (`editor.setLine` on the still-open, unanchored line, then `view.save()`) is
-   only exercised against the stub. On a real recurrence, check `anchor_added`
-   is set, the corresponding line in the saved file on disk actually carries it,
-   and that `tasks.py`'s own `ID_RE`/`TASK_RE` accept the resulting line
-   unchanged (no stray double space, no anchor before other trailing fields it
-   expects last).
-6. **Does `view.save()` land before the caller reads the file?** It is awaited,
-   but confirm against `fast-note-sync` — a save and a sync write racing on the
-   same file is exactly the shape of the earlier task-loss incident.
-7. **Port reachability.** The port has to be published from the Obsidian
-   container, and the `obsidian-docker` image/compose does not do that yet.
-8. **Restart survival.** Confirm the listener comes back after an Obsidian restart
-   inside the container, and that a stale listener does not block the port
-   (`EADDRINUSE` shows up as "not running — ..." in the settings tab).
+**Confirmed working**
+
+1. **The leaf opens and becomes the active editor under Xvfb.** `complete_task`
+   returns `changed: true` and the file really changes. The whole
+   `getLeaf()` + `openFile()` + `setActiveLeaf({focus: true})` dance survives an
+   instance nobody is looking at.
+2. **The 50 ms wait is enough, including on a cold start.** Four back-to-back
+   `complete_task` calls fired 14 s after a `podman restart` (SIGKILL, so a truly
+   cold Electron) all succeeded, ~135 ms each, no "could not open ... in a
+   Markdown editor". No flakiness seen across roughly a dozen calls on both
+   hosts. Leaving it as a fixed sleep for now; if it ever does show up, polling
+   for `view.editor` is still the better fix.
+3. **The command id is right.** Responses come back with
+   `command_id: "obsidian-tasks-plugin:toggle-done"` and the line is actually
+   toggled, so the id resolves on the installed Tasks 8.3.0. No dev console
+   needed to establish that.
+4. **Recurrence fires.** `lines_after` has two entries, `recurrence_created:
+   true`, and the date rolls forward:
+
+   ```
+   before: - [ ] … 🔁 every day ➕2026-09-03 📅2026-09-03 ^t-9f01
+   after:  - [ ] … 🔁 every day 📅 2026-09-04 ^t-84e7
+           - [x] … 🔁 every day ➕ 2026-09-03 📅 2026-09-03 ✅ 2026-09-03 ^t-9f01
+   ```
+
+   Neither instance has a `data.json` for Tasks, so this is Tasks' default
+   settings. Note the new occurrence **loses the `➕` created date** — that is
+   Tasks' own behaviour, not something this plugin can fix from here. `tasks.py`
+   parses the line fine (it reads `added` but never uses it), so this is
+   cosmetic, but it does mean a recurring task drifts out of the vault
+   convention that every task carries `➕`.
+5. **The minted anchor round-trips.** `anchor_added` was set on every recurrence
+   (`t-84e7`, `t-bb59`, `t-e97c`, `t-8036`, `t-797b`, `t-4194`), each one landed
+   on disk on the still-open line, and `tasks.py`'s `TASK_RE`, `ID_RE` and
+   `parse_line()` accept the resulting lines unchanged — no stray double space,
+   anchor last, both the new and the completed line parse to the right id.
+6. **`view.save()` lands before the caller reads the file, and there is no race
+   with `fast-note-sync`.** The change was already on disk in *both* vault copies
+   — the local one and the one on the other host — by the time the HTTP response
+   had been read, well under a second. Re-reading after 8 s and after 25 s showed
+   the same content, and no conflict or merge artefacts appeared in either vault.
+   A rename done on one host propagated to the other, old path gone and links
+   rewritten on both sides, within 3 s.
+7. **Port reachability — the old TODO was based on a wrong assumption.** It
+   assumed bridge networking. Both containers are on macvlan with their own LAN
+   address, so there is nothing to publish and `podman port` is empty on purpose.
+   `/health` answers from three different hosts in the LAN (mike, spathi and
+   192.0.0.200), so this is settled. `obsidian.mike.graz.philipp.ninja` resolves
+   to the mike container; spathi's has no DNS name yet, use 192.0.0.245.
+8. **Restart survival.** After `podman restart` (which needed a SIGKILL both
+   times) `/health` answered again within about 4 s and `complete_task` worked
+   immediately after. No `EADDRINUSE`, no stale listener. Same after the instance
+   died on its own and the supervisor brought it back.
+
+**Found broken, and fixed by a setting**
+
+9. `rename_file` hung forever and did not rewrite links, on both hosts, because
+   `alwaysUpdateLinks` was not set. See
+   [the section above](#alwaysupdatelinks-is-a-hard-requirement-not-a-preference).
+   Both instances now have `.obsidian/app.json` set to `{"alwaysUpdateLinks":
+   true}`; after that, renaming a note — including into a folder that has to be
+   created — rewrites plain links, aliased links and embeds, in ~20 ms.
+
+**Still open**
+
+10. **`complete_task` toggles in place; it does not archive.** The completed
+    `[x]` line stays where it was, next to the new occurrence. For tasks in
+    `tasks/offen.md` the archiving step is still `tasks.py done ^t-<old-id>`,
+    which does find and move an already-toggled line (verified against copies of
+    the real files, not the real ones). So the full sequence for a recurring task
+    is `complete_task` first, `tasks.py done` second, with the *old* id. Whether
+    that two-step belongs in the agent prompts or inside `tasks.py` itself is
+    Philipp's call, not this repo's.
+11. **`tasks.py`'s `ins_archiv()` drops the line silently** if the `## <yyyy-mm>`
+    heading in `tasks/erledigt.md` is not followed by a blank line — it reports
+    "erledigt und archiviert" either way. Noticed while testing the step above
+    against a fixture; the real file is fine. Belongs in `tasks.py`, noted here
+    only so it is not lost.
 
 ## Layout
 
