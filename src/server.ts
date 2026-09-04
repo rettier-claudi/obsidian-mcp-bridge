@@ -39,8 +39,11 @@ const TOOLS = [
             'recurring task (🔁) — inserts the next open occurrence, which no external ' +
             'regex edit can do. Tasks strips the block anchor from that new occurrence; this ' +
             'tool mints and appends a fresh ^t-xxxx id in tasks.py\'s own format so the new ' +
-            'line stays addressable (see anchor_added in the result). Identify the line by ' +
-            'block anchor (preferred), unique text, or line number.',
+            'line stays addressable (see anchor_added in the result). It also strips any ⏰ ' +
+            '(time) / ⏱ (duration) field before toggling and puts it back on both resulting ' +
+            'lines afterward — their mere presence otherwise makes Tasks silently skip ' +
+            'creating the recurrence (see custom_fields_preserved in the result). Identify ' +
+            'the line by block anchor (preferred), unique text, or line number.',
         inputSchema: {
             type: 'object',
             properties: {

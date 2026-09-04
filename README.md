@@ -255,6 +255,17 @@ an existing target.
   new instance lands above or below the completed one is a Tasks setting. The
   new-occurrence line is identified by being open and unanchored, wherever it
   landed — read `lines_after` if the caller needs to know the order too.
+- **`⏰` (time) and `⏱` (duration) — `tasks.py`'s own non-Tasks fields — are
+  stripped before the toggle and put back on both resulting lines afterward.**
+  Confirmed live 2026-09-04: their mere presence on a `🔁` line makes Tasks'
+  `toggle-done` silently skip creating the recurrence at all — checkbox and `✅`
+  ticked, no error, no next occurrence, `recurrence_created: false`. Not a
+  caching issue (survived a full container restart) and not about `➕`, which is
+  harmless alone — isolated to exactly these two fields by an A/B test against a
+  live instance. `custom_fields_preserved` in the result lists what was moved
+  (empty if the line had neither). Only these two are handled; nothing else has
+  been shown to cause this, and guessing at more would risk mangling a line for
+  a problem that was never confirmed.
 - **Non-task lines are refused.** Tasks' toggle command will happily convert a
   plain text line into a checklist item. This plugin checks the target line looks
   like `- [ ] ...` first and errors out otherwise, so a mis-addressed call cannot
@@ -266,13 +277,14 @@ an existing target.
 - The note stays open in a leaf afterwards. That is harmless in a headless
   instance, and keeps repeated calls on the same file fast.
 
-## Verified live (2026-09-03)
+## Verified live (2026-09-03, updated 2026-09-04)
 
 Everything below was checked against the two headless instances that run the
 plugin — `mike-obsidian` (`obsidian.mike.graz.philipp.ninja`, 192.0.0.238) and
 `claudi-obsidian` (192.0.0.245), both Obsidian 1.13.7, Tasks 8.3.0, both on
-macvlan with their own LAN address, port 27125. The test used a throwaway note
-with `🔁 every day` lines in `tasks.py`'s own format, not real tasks.
+macvlan with their own LAN address, port 27125. The 2026-09-03 pass used a
+throwaway note with `🔁 every day` lines in `tasks.py`'s own format, not real
+tasks. Item 10 below is from 2026-09-04, against Philipp's actual tDCS task.
 
 **Confirmed working**
 
@@ -336,10 +348,21 @@ with `🔁 every day` lines in `tasks.py`'s own format, not real tasks.
    Both instances now have `.obsidian/app.json` set to `{"alwaysUpdateLinks":
    true}`; after that, renaming a note — including into a folder that has to be
    created — rewrites plain links, aliased links and embeds, in ~20 ms.
+10. **`⏰`/`⏱` silently suppressed recurrence on Philipp's real tDCS task** —
+    found the hard way, live, on the first real (non-test) use of `complete_task`
+    after phase 2 shipped. `recurrence_created: false`, no error, checkbox and
+    `✅` date set as if it had worked. Ruled out caching (survived a restart),
+    ruled out the file (reproduced with a throwaway line in the same file *and*
+    with one in a fresh file), ruled out `➕` (harmless alone) and the specific
+    rule text or reference date (identical rule+date without `⏰`/`⏱` worked
+    fine) — narrowed to exactly those two fields by adding one at a time. Fixed
+    in `completeTask()` itself: strip them before dispatching `toggle-done`,
+    reinsert into whichever resulting lines are task lines afterward. See the
+    `⏰`/`⏱` bullet above.
 
 **Still open**
 
-10. **`complete_task` toggles in place; it does not archive.** The completed
+11. **`complete_task` toggles in place; it does not archive.** The completed
     `[x]` line stays where it was, next to the new occurrence. For tasks in
     `tasks/offen.md` the archiving step is still `tasks.py done ^t-<old-id>`,
     which does find and move an already-toggled line (verified against copies of
@@ -347,7 +370,7 @@ with `🔁 every day` lines in `tasks.py`'s own format, not real tasks.
     is `complete_task` first, `tasks.py done` second, with the *old* id. Whether
     that two-step belongs in the agent prompts or inside `tasks.py` itself is
     Philipp's call, not this repo's.
-11. **`tasks.py`'s `ins_archiv()` drops the line silently** if the `## <yyyy-mm>`
+12. **`tasks.py`'s `ins_archiv()` drops the line silently** if the `## <yyyy-mm>`
     heading in `tasks/erledigt.md` is not followed by a blank line — it reports
     "erledigt und archiviert" either way. Noticed while testing the step above
     against a fixture; the real file is fine. Belongs in `tasks.py`, noted here

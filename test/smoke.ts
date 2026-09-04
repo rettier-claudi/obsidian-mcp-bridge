@@ -32,6 +32,7 @@ const files: Record<string, string> = {
         '- [ ] Milch kaufen ^t-beef',
         'kein Task, nur Text ^t-dead',
         '- [ ] Blutdruck messen 🔁 every day 📅 2026-09-02 ^t-cafe',
+        '- [ ] Tabletten nehmen 🔁 every day 📅 2026-09-02 ⏰08:00 ⏱5m ^t-time',
         '',
     ].join('\n'),
     'Notizen/alt.md': '# Alt\n',
@@ -70,12 +71,15 @@ const app: any = {
         // have the same block link"), and — per toggleWithRecurrenceInUsersOrder()
         // — which of the two comes first is a Tasks *setting*, not a constant. The
         // "Blutdruck" line exercises the done-first order to prove the anchor logic
-        // does not assume a position.
+        // does not assume a position. If the line handed to this command still has
+        // ⏰/⏱ on it, it reproduces the real bug (confirmed 2026-09-04 live) and
+        // refuses to create a recurrence at all — the test only passes because
+        // completeTask() strips those fields before dispatching.
         executeCommandById: (id: string) => {
             if (id !== DEFAULT_SETTINGS.toggleDoneCommandId) return false;
             const editor: Editor = (leaf.view as MarkdownView).editor;
             editor.applyToggle((line) => {
-                if (line.includes('🔁')) {
+                if (line.includes('🔁') && !/⏰|⏱/.test(line)) {
                     const withoutAnchor = line.replace(/\s*\^[\w-]+\s*$/, '');
                     const nextOpen = withoutAnchor.replace('- [ ]', '- [ ]').replace('📅 2026-09-02', '📅 2026-09-03');
                     const done = line.replace('- [ ]', '- [x]') + ' ✅ 2026-09-02';
@@ -220,6 +224,30 @@ async function main() {
             recReversedBody.lines_after?.[0]?.includes('^t-cafe') &&
             recReversedBody.lines_after?.[1]?.endsWith(`^${recReversedBody.anchor_added}`),
         recReversedBody,
+    );
+
+    const recWithTime = await rpc({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: { name: 'complete_task', arguments: { path: 'Aufgaben/geplant.md', anchor: 't-time' } },
+    });
+    const recWithTimeBody = payload(recWithTime);
+    check(
+        '⏰/⏱ do not suppress the recurrence (stripped before dispatch)',
+        recWithTimeBody.recurrence_created === true,
+        recWithTimeBody,
+    );
+    check(
+        'custom_fields_preserved reports what was stripped, in order',
+        JSON.stringify(recWithTimeBody.custom_fields_preserved) === JSON.stringify(['⏰08:00', '⏱5m']),
+        recWithTimeBody,
+    );
+    check(
+        '⏰/⏱ land back on both resulting lines, before the anchor',
+        recWithTimeBody.lines_after?.every((l: string) => l.includes('⏰08:00') && l.includes('⏱5m')) &&
+            recWithTimeBody.lines_after?.[0]?.endsWith(`⏰08:00 ⏱5m ^${recWithTimeBody.anchor_added}`),
+        recWithTimeBody,
     );
 
     const notATask = await rpc({
