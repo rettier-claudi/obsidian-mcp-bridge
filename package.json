@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mcp-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Obsidian plugin exposing an MCP server (Streamable HTTP) for completing Tasks-plugin tasks and link-aware file renames.",
   "main": "main.js",
   "private": true,
