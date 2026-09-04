@@ -1,7 +1,7 @@
 {
   "id": "mcp-bridge",
   "name": "MCP Bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.8.7",
   "description": "Exposes a small MCP server (Streamable HTTP) so external automation can complete tasks and rename files through the running Obsidian instance instead of editing Markdown by hand.",
   "author": "Claudi",

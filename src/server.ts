@@ -26,7 +26,7 @@ import { ActionError, completeTask, renameFile } from './actions';
 import type { McpBridgeSettings } from './settings';
 
 const SERVER_NAME = 'obsidian-mcp-bridge';
-const SERVER_VERSION = '0.1.1';
+const SERVER_VERSION = '0.1.2';
 // Node lower-cases incoming header names.
 const TOKEN_HEADER = 'x-bridge-token';
 

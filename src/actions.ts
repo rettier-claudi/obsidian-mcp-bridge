@@ -85,8 +85,15 @@ function stripCustomFields(line: string): { stripped: string; fields: string[] }
 function reinsertCustomFields(line: string, fields: string[]): string {
     if (fields.length === 0) return line;
     const insertion = fields.join(' ');
-    // Same slot tasks.py itself uses: right before the trailing block anchor
-    // if there already is one, otherwise at the end of the line.
+    // Same slot tasks.py itself uses: before ✅ (tasks.py's cmd_done inserts it
+    // right before the anchor, so on a completed line it now sits ahead of
+    // where ⏰/⏱ used to be), else before the trailing block anchor, else at
+    // the end of the line.
+    const doneMatch = line.match(/\s✅\s*\d{4}-\d{2}-\d{2}/);
+    if (doneMatch) {
+        const at = doneMatch.index!;
+        return `${line.slice(0, at)} ${insertion}${line.slice(at)}`;
+    }
     const anchorMatch = line.match(/\s\^[\w-]+\s*$/);
     if (anchorMatch) {
         const at = anchorMatch.index!;
