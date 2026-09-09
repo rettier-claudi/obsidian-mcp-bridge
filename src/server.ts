@@ -26,7 +26,9 @@ import { ActionError, completeTask, renameFile } from './actions';
 import type { McpBridgeSettings } from './settings';
 
 const SERVER_NAME = 'obsidian-mcp-bridge';
-const SERVER_VERSION = '0.1.2';
+// Replaced at build time from manifest.json — see esbuild.config.mjs.
+declare const __PLUGIN_VERSION__: string;
+const SERVER_VERSION = __PLUGIN_VERSION__;
 // Node lower-cases incoming header names.
 const TOKEN_HEADER = 'x-bridge-token';
 
