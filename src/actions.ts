@@ -67,15 +67,25 @@ function mintAnchorId(taken: Set<string>): string {
  * the ✅ date still get set, only the recurrence step aborts, with no error
  * anywhere to catch. Workaround: strip them before dispatching the command,
  * then put the same values back on every task line that comes out of the
- * toggle. Only these two are handled here — nothing else has been shown to
- * trigger this, and guessing at more would risk silently mangling a line for
- * a problem that was never confirmed.
+ * toggle. Only fields shown to trigger this are handled here — guessing at
+ * more would risk silently mangling a line for a problem that was never
+ * confirmed.
+ *
+ * ↩ (how often the ⏳ intent was pushed back — tasks.py's `VERSCHOBEN_RE`) does
+ * the same thing. Confirmed 2026-09-09, live against the bridge: a 🔁 line
+ * carrying ↩1 gets ticked but produces no next occurrence, while the identical
+ * line without it recurs. That is how the tDCS routine went missing — `plan`
+ * had deferred it once, so every completion after that quietly ended the
+ * series. It is stripped like ⏰/⏱ but *not* put back on the new occurrence:
+ * the counter describes the instance that was postponed, not the routine, and
+ * a fresh occurrence has been postponed zero times.
  */
 const CUSTOM_FIELD_RE = /\s*(⏰\s*\d{1,2}:\d{2}|⏱\s*(?:\d+h\d{2}|\d+h|\d+m))/g;
+const DEFER_COUNT_RE = /\s*(↩\s*\d+)/g;
 
-function stripCustomFields(line: string): { stripped: string; fields: string[] } {
+function stripByRe(line: string, re: RegExp): { stripped: string; fields: string[] } {
     const fields: string[] = [];
-    const stripped = line.replace(CUSTOM_FIELD_RE, (_match, field: string) => {
+    const stripped = line.replace(re, (_match, field: string) => {
         fields.push(field.trim());
         return '';
     });
@@ -119,6 +129,7 @@ export interface CompleteTaskResult {
     recurrence_created: boolean;
     anchor_added: string | null;
     custom_fields_preserved: string[];
+    defer_count_preserved: string[];
     changed: boolean;
     command_id: string;
 }
@@ -280,10 +291,13 @@ export async function completeTask(
         );
     }
 
-    // Strip ⏰/⏱ before handing the line to Tasks — see stripCustomFields().
-    const { stripped, fields: customFields } = stripCustomFields(lineBefore);
-    if (customFields.length > 0) {
-        editor.setLine(lineIdx, stripped);
+    // Strip ⏰/⏱ and ↩ before handing the line to Tasks — see CUSTOM_FIELD_RE.
+    const withoutCustom = stripByRe(lineBefore, CUSTOM_FIELD_RE);
+    const withoutDefer = stripByRe(withoutCustom.stripped, DEFER_COUNT_RE);
+    const customFields = withoutCustom.fields;
+    const deferFields = withoutDefer.fields;
+    if (customFields.length > 0 || deferFields.length > 0) {
+        editor.setLine(lineIdx, withoutDefer.stripped);
     }
 
     const before = editor.getValue().split('\n');
@@ -301,16 +315,20 @@ export async function completeTask(
     const after = editor.getValue().split('\n');
     const grew = Math.max(0, after.length - before.length);
 
-    // Put ⏰/⏱ back on every task line the toggle produced — the completed
-    // line and, if there is one, the new occurrence. Both get the same
-    // values back: it was one field describing the routine, not the instance.
-    if (customFields.length > 0) {
+    // Put the stripped fields back on every task line the toggle produced — the
+    // completed line and, if there is one, the new occurrence. ⏰/⏱ go on both:
+    // they describe the routine, not the instance. ↩ goes only on the completed
+    // line — see DEFER_COUNT_RE. The new occurrence is the one still open and
+    // still without an anchor (Tasks clears it); the anchor is minted below.
+    if (customFields.length > 0 || deferFields.length > 0) {
         for (let i = lineIdx; i <= lineIdx + grew; i++) {
-            if (TASK_LINE.test(after[i])) {
-                const withFields = reinsertCustomFields(after[i], customFields);
-                editor.setLine(i, withFields);
-                after[i] = withFields;
-            }
+            if (!TASK_LINE.test(after[i])) continue;
+            const isNewOccurrence =
+                /^[\s>]*(?:[-*+]|\d+\.)\s+\[ \]/.test(after[i]) && !TRAILING_ANCHOR_RE.test(after[i]);
+            const fields = isNewOccurrence ? customFields : [...deferFields, ...customFields];
+            const withFields = reinsertCustomFields(after[i], fields);
+            editor.setLine(i, withFields);
+            after[i] = withFields;
         }
     }
 
@@ -350,6 +368,7 @@ export async function completeTask(
         recurrence_created: grew > 0,
         anchor_added: anchorAdded,
         custom_fields_preserved: customFields,
+        defer_count_preserved: deferFields,
         changed: after.length !== before.length || after[lineIdx] !== before[lineIdx],
         command_id: commandId,
     };

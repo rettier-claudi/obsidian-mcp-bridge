@@ -263,9 +263,17 @@ an existing target.
   caching issue (survived a full container restart) and not about `➕`, which is
   harmless alone — isolated to exactly these two fields by an A/B test against a
   live instance. `custom_fields_preserved` in the result lists what was moved
-  (empty if the line had neither). Only these two are handled; nothing else has
-  been shown to cause this, and guessing at more would risk mangling a line for
-  a problem that was never confirmed.
+  (empty if the line had neither).
+- **`↩` (deferral count) does the same thing, and is stripped the same way —
+  but only put back on the completed line.** Confirmed live 2026-09-09 against
+  the same tDCS routine: `- [ ] … 🔁 every week on Monday…Friday ⏳2026-09-08 ↩1
+  ⏰18:00 ⏱20m` ticks with `recurrence_created: false`, while the byte-identical
+  line without `↩1` recurs. `⏰`/`⏱` describe the routine, so they go back on
+  both lines; `↩` counts how often *that* instance was pushed back, and a fresh
+  occurrence has been pushed back zero times, so it is not carried over.
+  Reported as `defer_count_preserved`. Only these three fields are handled;
+  nothing else has been shown to cause this, and guessing at more would risk
+  mangling a line for a problem that was never confirmed.
 - **Non-task lines are refused.** Tasks' toggle command will happily convert a
   plain text line into a checklist item. This plugin checks the target line looks
   like `- [ ] ...` first and errors out otherwise, so a mis-addressed call cannot
@@ -359,10 +367,20 @@ tasks. Item 10 below is from 2026-09-04, against Philipp's actual tDCS task.
     in `completeTask()` itself: strip them before dispatching `toggle-done`,
     reinsert into whichever resulting lines are task lines afterward. See the
     `⏰`/`⏱` bullet above.
+11. **`↩` suppressed it too — same task, same silence, five days later.** The
+    0.1.2 fix was correct but incomplete: it was narrowed to `⏰`/`⏱` because
+    those were the two fields on the line that day. Once `tasks.py plan` had
+    deferred the tDCS task once, the line carried `↩1` as well and every
+    completion after that quietly ended the series — the 2026-09-08 instance was
+    ticked on 2026-09-09 and no next occurrence appeared. Reproduced against the
+    live bridge with three throwaway lines: `↩` removed → recurs, `↩` alone (no
+    `⏰`/`⏱`) → does not. Same fix, extended. The lesson for a future field: any
+    vault-local emoji field on a `🔁` line is guilty until an A/B test says
+    otherwise.
 
 **Still open**
 
-11. **`complete_task` toggles in place; it does not archive.** The completed
+12. **`complete_task` toggles in place; it does not archive.** The completed
     `[x]` line stays where it was, next to the new occurrence. For tasks in
     `tasks/offen.md` the archiving step is still `tasks.py done ^t-<old-id>`,
     which does find and move an already-toggled line (verified against copies of
@@ -370,7 +388,7 @@ tasks. Item 10 below is from 2026-09-04, against Philipp's actual tDCS task.
     is `complete_task` first, `tasks.py done` second, with the *old* id. Whether
     that two-step belongs in the agent prompts or inside `tasks.py` itself is
     Philipp's call, not this repo's.
-12. **`tasks.py`'s `ins_archiv()` drops the line silently** if the `## <yyyy-mm>`
+13. **`tasks.py`'s `ins_archiv()` drops the line silently** if the `## <yyyy-mm>`
     heading in `tasks/erledigt.md` is not followed by a blank line — it reports
     "erledigt und archiviert" either way. Noticed while testing the step above
     against a fixture; the real file is fine. Belongs in `tasks.py`, noted here

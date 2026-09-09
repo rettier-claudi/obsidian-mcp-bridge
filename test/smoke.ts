@@ -33,6 +33,7 @@ const files: Record<string, string> = {
         'kein Task, nur Text ^t-dead',
         '- [ ] Blutdruck messen 🔁 every day 📅 2026-09-02 ^t-cafe',
         '- [ ] Tabletten nehmen 🔁 every day 📅 2026-09-02 ⏰08:00 ⏱5m ^t-time',
+        '- [ ] tDCS machen 🔁 every day 📅 2026-09-02 ↩1 ⏰18:00 ⏱20m ^t-defer',
         '',
     ].join('\n'),
     'Notizen/alt.md': '# Alt\n',
@@ -72,14 +73,14 @@ const app: any = {
         // — which of the two comes first is a Tasks *setting*, not a constant. The
         // "Blutdruck" line exercises the done-first order to prove the anchor logic
         // does not assume a position. If the line handed to this command still has
-        // ⏰/⏱ on it, it reproduces the real bug (confirmed 2026-09-04 live) and
-        // refuses to create a recurrence at all — the test only passes because
-        // completeTask() strips those fields before dispatching.
+        // ⏰/⏱ or ↩ on it, it reproduces the real bug (⏰/⏱ confirmed 2026-09-04
+        // live, ↩ on 2026-09-09) and refuses to create a recurrence at all — the
+        // test only passes because completeTask() strips those fields first.
         executeCommandById: (id: string) => {
             if (id !== DEFAULT_SETTINGS.toggleDoneCommandId) return false;
             const editor: Editor = (leaf.view as MarkdownView).editor;
             editor.applyToggle((line) => {
-                if (line.includes('🔁') && !/⏰|⏱/.test(line)) {
+                if (line.includes('🔁') && !/⏰|⏱|↩/.test(line)) {
                     const withoutAnchor = line.replace(/\s*\^[\w-]+\s*$/, '');
                     const nextOpen = withoutAnchor.replace('- [ ]', '- [ ]').replace('📅 2026-09-02', '📅 2026-09-03');
                     const done = line.replace('- [ ]', '- [x]') + ' ✅ 2026-09-02';
@@ -248,6 +249,31 @@ async function main() {
         recWithTimeBody.lines_after?.every((l: string) => l.includes('⏰08:00') && l.includes('⏱5m')) &&
             recWithTimeBody.lines_after?.[0]?.endsWith(`⏰08:00 ⏱5m ^${recWithTimeBody.anchor_added}`),
         recWithTimeBody,
+    );
+
+    const recWithDefer = await rpc({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: { name: 'complete_task', arguments: { path: 'Aufgaben/geplant.md', anchor: 't-defer' } },
+    });
+    const recWithDeferBody = payload(recWithDefer);
+    check(
+        '↩ does not suppress the recurrence either (stripped before dispatch)',
+        recWithDeferBody.recurrence_created === true,
+        recWithDeferBody,
+    );
+    check(
+        'defer_count_preserved reports the ↩ that was stripped',
+        JSON.stringify(recWithDeferBody.defer_count_preserved) === JSON.stringify(['↩1']),
+        recWithDeferBody,
+    );
+    check(
+        '↩ goes back on the completed line only, never on the new occurrence',
+        recWithDeferBody.lines_after?.filter((l: string) => l.includes('↩1')).length === 1 &&
+            recWithDeferBody.lines_after?.every((l: string) => !l.includes('↩1') || /- \[x\]/.test(l)) &&
+            recWithDeferBody.lines_after?.every((l: string) => l.includes('⏰18:00') && l.includes('⏱20m')),
+        recWithDeferBody,
     );
 
     const notATask = await rpc({
