@@ -32,12 +32,35 @@ const files: Record<string, string> = {
         '- [ ] Milch kaufen ^t-beef',
         'kein Task, nur Text ^t-dead',
         '- [ ] Blutdruck messen 🔁 every day 📅 2026-09-02 ^t-cafe',
-        '- [ ] Tabletten nehmen 🔁 every day 📅 2026-09-02 ⏰08:00 ⏱5m ^t-time',
-        '- [ ] tDCS machen 🔁 every day 📅 2026-09-02 ↩1 ⏰18:00 ⏱20m ^t-defer',
+        '- [ ] Tabletten nehmen ⏰08:00 ⏱5m ↩1 🔁 every day 📅 2026-09-02 ^t-time',
+        '- [ ] tDCS machen 🔁 every day 📅 2026-09-02 ↩1 ⏰18:00 ⏱20m ^t-late',
         '',
     ].join('\n'),
     'Notizen/alt.md': '# Alt\n',
 };
+
+// Tasks' deserializer in miniature: strip end-anchored fields until none match,
+// and report whether a 🔁 rule was among them.
+function recurrenceFromEnd(line: string): boolean {
+    let body = line.replace(/^[\s>]*(?:[-*+]|\d+\.)\s+\[.\]\s+/, '').replace(/\s*\^[\w-]+\s*$/, '');
+    const fields = [/\s*[📅⏳➕✅🛫]\uFE0F? *\d{4}-\d{2}-\d{2}$/u, /\s*⏫$/u, /\s*#[^\s#]+$/u];
+    const rule = /\s*🔁\uFE0F? *[a-zA-Z0-9, !]+$/u;
+    let found = false;
+    for (let matched = true; matched; ) {
+        matched = false;
+        if (rule.test(body)) {
+            body = body.replace(rule, '');
+            found = matched = true;
+        }
+        for (const re of fields) {
+            if (re.test(body)) {
+                body = body.replace(re, '');
+                matched = true;
+            }
+        }
+    }
+    return found;
+}
 
 const leaf = new WorkspaceLeaf();
 const renames: Array<[string, string]> = [];
@@ -72,15 +95,15 @@ const app: any = {
         // have the same block link"), and — per toggleWithRecurrenceInUsersOrder()
         // — which of the two comes first is a Tasks *setting*, not a constant. The
         // "Blutdruck" line exercises the done-first order to prove the anchor logic
-        // does not assume a position. If the line handed to this command still has
-        // ⏰/⏱ or ↩ on it, it reproduces the real bug (⏰/⏱ confirmed 2026-09-04
-        // live, ↩ on 2026-09-09) and refuses to create a recurrence at all — the
-        // test only passes because completeTask() strips those fields first.
+        // does not assume a position. Like the real deserializer it reads fields
+        // from the end of the line only (recurrenceFromEnd): text behind the
+        // fields hides 🔁, and the task is ticked without a next occurrence — the
+        // real bug of 2026-09-04/09 with ⏰/⏱/↩ behind ⏳/📅.
         executeCommandById: (id: string) => {
             if (id !== DEFAULT_SETTINGS.toggleDoneCommandId) return false;
             const editor: Editor = (leaf.view as MarkdownView).editor;
             editor.applyToggle((line) => {
-                if (line.includes('🔁') && !/⏰|⏱|↩/.test(line)) {
+                if (recurrenceFromEnd(line)) {
                     const withoutAnchor = line.replace(/\s*\^[\w-]+\s*$/, '');
                     const nextOpen = withoutAnchor.replace('- [ ]', '- [ ]').replace('📅 2026-09-02', '📅 2026-09-03');
                     const done = line.replace('- [ ]', '- [x]') + ' ✅ 2026-09-02';
@@ -235,45 +258,36 @@ async function main() {
     });
     const recWithTimeBody = payload(recWithTime);
     check(
-        '⏰/⏱ do not suppress the recurrence (stripped before dispatch)',
+        '⏰/⏱/↩ behind the text do not suppress the recurrence',
         recWithTimeBody.recurrence_created === true,
         recWithTimeBody,
     );
     check(
-        'custom_fields_preserved reports what was stripped, in order',
-        JSON.stringify(recWithTimeBody.custom_fields_preserved) === JSON.stringify(['⏰08:00', '⏱5m']),
+        'the line reaches Tasks untouched: both lines keep the head as it was',
+        recWithTimeBody.lines_after?.every((l: string) =>
+            /^- \[[ x]\] Tabletten nehmen ⏰08:00 ⏱5m ↩1 🔁 every day/.test(l)) &&
+            recWithTimeBody.lines_after?.[0]?.endsWith(`📅 2026-09-03 ^${recWithTimeBody.anchor_added}`),
         recWithTimeBody,
     );
     check(
-        '⏰/⏱ land back on both resulting lines, before the anchor',
-        recWithTimeBody.lines_after?.every((l: string) => l.includes('⏰08:00') && l.includes('⏱5m')) &&
-            recWithTimeBody.lines_after?.[0]?.endsWith(`⏰08:00 ⏱5m ^${recWithTimeBody.anchor_added}`),
+        'no field bookkeeping in the result any more',
+        !('custom_fields_preserved' in recWithTimeBody) && !('defer_count_preserved' in recWithTimeBody),
         recWithTimeBody,
     );
 
-    const recWithDefer = await rpc({
+    const late = await rpc({
         jsonrpc: '2.0',
         id: 5,
         method: 'tools/call',
-        params: { name: 'complete_task', arguments: { path: 'Aufgaben/geplant.md', anchor: 't-defer' } },
+        params: { name: 'complete_task', arguments: { path: 'Aufgaben/geplant.md', anchor: 't-late' } },
     });
-    const recWithDeferBody = payload(recWithDefer);
+    const lateBody = payload(late);
     check(
-        '↩ does not suppress the recurrence either (stripped before dispatch)',
-        recWithDeferBody.recurrence_created === true,
-        recWithDeferBody,
-    );
-    check(
-        'defer_count_preserved reports the ↩ that was stripped',
-        JSON.stringify(recWithDeferBody.defer_count_preserved) === JSON.stringify(['↩1']),
-        recWithDeferBody,
-    );
-    check(
-        '↩ goes back on the completed line only, never on the new occurrence',
-        recWithDeferBody.lines_after?.filter((l: string) => l.includes('↩1')).length === 1 &&
-            recWithDeferBody.lines_after?.every((l: string) => !l.includes('↩1') || /- \[x\]/.test(l)) &&
-            recWithDeferBody.lines_after?.every((l: string) => l.includes('⏰18:00') && l.includes('⏱20m')),
-        recWithDeferBody,
+        'text behind the fields is not rescued: ticked, but no recurrence (as in Obsidian)',
+        lateBody.ok === true && lateBody.recurrence_created === false &&
+            lateBody.lines_after?.length === 1 &&
+            lateBody.lines_after[0].startsWith('- [x] tDCS machen 🔁 every day 📅 2026-09-02 ↩1 ⏰18:00 ⏱20m '),
+        lateBody,
     );
 
     const notATask = await rpc({

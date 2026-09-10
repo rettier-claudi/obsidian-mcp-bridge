@@ -255,25 +255,18 @@ an existing target.
   new instance lands above or below the completed one is a Tasks setting. The
   new-occurrence line is identified by being open and unanchored, wherever it
   landed — read `lines_after` if the caller needs to know the order too.
-- **`⏰` (time) and `⏱` (duration) — `tasks.py`'s own non-Tasks fields — are
-  stripped before the toggle and put back on both resulting lines afterward.**
-  Confirmed live 2026-09-04: their mere presence on a `🔁` line makes Tasks'
-  `toggle-done` silently skip creating the recurrence at all — checkbox and `✅`
-  ticked, no error, no next occurrence, `recurrence_created: false`. Not a
-  caching issue (survived a full container restart) and not about `➕`, which is
-  harmless alone — isolated to exactly these two fields by an A/B test against a
-  live instance. `custom_fields_preserved` in the result lists what was moved
-  (empty if the line had neither).
-- **`↩` (deferral count) does the same thing, and is stripped the same way —
-  but only put back on the completed line.** Confirmed live 2026-09-09 against
-  the same tDCS routine: `- [ ] … 🔁 every week on Monday…Friday ⏳2026-09-08 ↩1
-  ⏰18:00 ⏱20m` ticks with `recurrence_created: false`, while the byte-identical
-  line without `↩1` recurs. `⏰`/`⏱` describe the routine, so they go back on
-  both lines; `↩` counts how often *that* instance was pushed back, and a fresh
-  occurrence has been pushed back zero times, so it is not carried over.
-  Reported as `defer_count_preserved`. Only these three fields are handled;
-  nothing else has been shown to cause this, and guessing at more would risk
-  mangling a line for a problem that was never confirmed.
+- **The line goes to Tasks as it is — keep non-Tasks text before the fields.**
+  Tasks reads its emoji fields from the *end* of the line and stops at the first
+  thing that is not one (`deserialize`, 8.4.0). Anything behind ⏳/📅/🔁 hides all
+  of them: the line is ticked, but `recurrence_created` is `false` — exactly what
+  happened with `tasks.py`'s own `⏰`/`⏱`/`↩` (items 10 and 11 below). 0.1.2/0.1.3
+  worked around it by stripping those fields before the toggle and putting them
+  back afterwards; since 0.2.0 (2026-09-10) `tasks.py` writes them directly after
+  the task text, where Tasks treats them as description and copies them into the
+  next occurrence itself, so the workaround is gone. `tasks.py done` also drops
+  `↩` from the new occurrence — the counter belongs to the postponed instance,
+  not the routine. The result no longer has `custom_fields_preserved` /
+  `defer_count_preserved`.
 - **Non-task lines are refused.** Tasks' toggle command will happily convert a
   plain text line into a checklist item. This plugin checks the target line looks
   like `- [ ] ...` first and errors out otherwise, so a mis-addressed call cannot
@@ -366,7 +359,7 @@ tasks. Item 10 below is from 2026-09-04, against Philipp's actual tDCS task.
     fine) — narrowed to exactly those two fields by adding one at a time. Fixed
     in `completeTask()` itself: strip them before dispatching `toggle-done`,
     reinsert into whichever resulting lines are task lines afterward. See the
-    `⏰`/`⏱` bullet above.
+    field-position bullet above.
 11. **`↩` suppressed it too — same task, same silence, five days later.** The
     0.1.2 fix was correct but incomplete: it was narrowed to `⏰`/`⏱` because
     those were the two fields on the line that day. Once `tasks.py plan` had
@@ -377,6 +370,13 @@ tasks. Item 10 below is from 2026-09-04, against Philipp's actual tDCS task.
     `⏰`/`⏱`) → does not. Same fix, extended. The lesson for a future field: any
     vault-local emoji field on a `🔁` line is guilty until an A/B test says
     otherwise.
+12. **Root cause, 2026-09-10: position, not the fields themselves.** Reading
+    Tasks 8.4.0's `deserialize` showed why items 10 and 11 happened: fields are
+    matched with `$`-anchored patterns from the end of the line, and parsing stops
+    at the first non-field — so *any* text behind ⏳/📅/🔁 hides all of them, and the
+    same lines were also missing from every Tasks date query (`happens today`).
+    Fixed at the source by moving `tasks.py`'s fields in front of the tags; the
+    strip-and-reinsert workaround was removed in 0.2.0.
 
 **Still open**
 

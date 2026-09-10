@@ -59,58 +59,17 @@ function mintAnchorId(taken: Set<string>): string {
     return `t-${id}`;
 }
 
-/**
- * ⏰ (time) and ⏱ (duration) are vault-local fields, not part of Tasks' own
- * vocabulary — see tasks.py's `ZEIT_RE`/`DAUER_RE`. Confirmed 2026-09-04, live
- * against a real recurring task: their mere presence makes Tasks' own
- * toggle-done silently skip creating the next occurrence — the checkbox and
- * the ✅ date still get set, only the recurrence step aborts, with no error
- * anywhere to catch. Workaround: strip them before dispatching the command,
- * then put the same values back on every task line that comes out of the
- * toggle. Only fields shown to trigger this are handled here — guessing at
- * more would risk silently mangling a line for a problem that was never
- * confirmed.
- *
- * ↩ (how often the ⏳ intent was pushed back — tasks.py's `VERSCHOBEN_RE`) does
- * the same thing. Confirmed 2026-09-09, live against the bridge: a 🔁 line
- * carrying ↩1 gets ticked but produces no next occurrence, while the identical
- * line without it recurs. That is how the tDCS routine went missing — `plan`
- * had deferred it once, so every completion after that quietly ended the
- * series. It is stripped like ⏰/⏱ but *not* put back on the new occurrence:
- * the counter describes the instance that was postponed, not the routine, and
- * a fresh occurrence has been postponed zero times.
+/*
+ * Why there is no field juggling here any more: Tasks reads its emoji fields
+ * from the *end* of the line and stops at the first thing that is not one
+ * (`deserialize`, 8.4.0). Up to 0.1.3 this plugin stripped tasks.py's own
+ * ⏰/⏱/↩ before the toggle and put them back afterwards, because they sat
+ * behind ⏳/📅 and hid every field — including 🔁 — from Tasks. Since
+ * 2026-09-10 tasks.py writes them directly after the task text, where Tasks
+ * treats them as description and copies them into the next occurrence itself.
+ * The line is handed to Tasks untouched; a caller that puts free text behind
+ * the fields gets `recurrence_created: false`, same as in Obsidian's own UI.
  */
-const CUSTOM_FIELD_RE = /\s*(⏰\s*\d{1,2}:\d{2}|⏱\s*(?:\d+h\d{2}|\d+h|\d+m))/g;
-const DEFER_COUNT_RE = /\s*(↩\s*\d+)/g;
-
-function stripByRe(line: string, re: RegExp): { stripped: string; fields: string[] } {
-    const fields: string[] = [];
-    const stripped = line.replace(re, (_match, field: string) => {
-        fields.push(field.trim());
-        return '';
-    });
-    return { stripped, fields };
-}
-
-function reinsertCustomFields(line: string, fields: string[]): string {
-    if (fields.length === 0) return line;
-    const insertion = fields.join(' ');
-    // Same slot tasks.py itself uses: before ✅ (tasks.py's cmd_done inserts it
-    // right before the anchor, so on a completed line it now sits ahead of
-    // where ⏰/⏱ used to be), else before the trailing block anchor, else at
-    // the end of the line.
-    const doneMatch = line.match(/\s✅\s*\d{4}-\d{2}-\d{2}/);
-    if (doneMatch) {
-        const at = doneMatch.index!;
-        return `${line.slice(0, at)} ${insertion}${line.slice(at)}`;
-    }
-    const anchorMatch = line.match(/\s\^[\w-]+\s*$/);
-    if (anchorMatch) {
-        const at = anchorMatch.index!;
-        return `${line.slice(0, at)} ${insertion}${line.slice(at)}`;
-    }
-    return `${line.replace(/\s+$/, '')} ${insertion}`;
-}
 
 export class ActionError extends Error {}
 
@@ -128,8 +87,6 @@ export interface CompleteTaskResult {
     lines_after: string[];
     recurrence_created: boolean;
     anchor_added: string | null;
-    custom_fields_preserved: string[];
-    defer_count_preserved: string[];
     changed: boolean;
     command_id: string;
 }
@@ -291,15 +248,6 @@ export async function completeTask(
         );
     }
 
-    // Strip ⏰/⏱ and ↩ before handing the line to Tasks — see CUSTOM_FIELD_RE.
-    const withoutCustom = stripByRe(lineBefore, CUSTOM_FIELD_RE);
-    const withoutDefer = stripByRe(withoutCustom.stripped, DEFER_COUNT_RE);
-    const customFields = withoutCustom.fields;
-    const deferFields = withoutDefer.fields;
-    if (customFields.length > 0 || deferFields.length > 0) {
-        editor.setLine(lineIdx, withoutDefer.stripped);
-    }
-
     const before = editor.getValue().split('\n');
     editor.setCursor({ line: lineIdx, ch: 0 });
 
@@ -314,23 +262,6 @@ export async function completeTask(
 
     const after = editor.getValue().split('\n');
     const grew = Math.max(0, after.length - before.length);
-
-    // Put the stripped fields back on every task line the toggle produced — the
-    // completed line and, if there is one, the new occurrence. ⏰/⏱ go on both:
-    // they describe the routine, not the instance. ↩ goes only on the completed
-    // line — see DEFER_COUNT_RE. The new occurrence is the one still open and
-    // still without an anchor (Tasks clears it); the anchor is minted below.
-    if (customFields.length > 0 || deferFields.length > 0) {
-        for (let i = lineIdx; i <= lineIdx + grew; i++) {
-            if (!TASK_LINE.test(after[i])) continue;
-            const isNewOccurrence =
-                /^[\s>]*(?:[-*+]|\d+\.)\s+\[ \]/.test(after[i]) && !TRAILING_ANCHOR_RE.test(after[i]);
-            const fields = isNewOccurrence ? customFields : [...deferFields, ...customFields];
-            const withFields = reinsertCustomFields(after[i], fields);
-            editor.setLine(i, withFields);
-            after[i] = withFields;
-        }
-    }
 
     // Which of the two lines is the new occurrence and which is the completed
     // one is a Tasks *setting* (toggleWithRecurrenceInUsersOrder), not a fixed
@@ -367,8 +298,6 @@ export async function completeTask(
         lines_after: linesAfter,
         recurrence_created: grew > 0,
         anchor_added: anchorAdded,
-        custom_fields_preserved: customFields,
-        defer_count_preserved: deferFields,
         changed: after.length !== before.length || after[lineIdx] !== before[lineIdx],
         command_id: commandId,
     };
