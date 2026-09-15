@@ -1,4 +1,5 @@
 import { Notice, Plugin } from 'obsidian';
+import { ConflictResolver } from './conflicts';
 import { BridgeHttpServer } from './server';
 import { DEFAULT_SETTINGS, McpBridgeSettingTab, McpBridgeSettings, generateToken } from './settings';
 
@@ -6,6 +7,7 @@ export default class McpBridgePlugin extends Plugin {
     settings: McpBridgeSettings = { ...DEFAULT_SETTINGS };
     private server: BridgeHttpServer | null = null;
     private lastError: string | null = null;
+    conflicts: ConflictResolver | null = null;
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -37,8 +39,19 @@ export default class McpBridgePlugin extends Plugin {
 
         // Wait for layout: opening files in leaves needs a workspace, and on a
         // headless start the layout is not ready during onload.
+        this.conflicts = new ConflictResolver(
+            this.app,
+            this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`,
+            () => this.settings.resolveSyncConflicts,
+        );
+
         this.app.workspace.onLayoutReady(() => {
             void this.restartServer();
+            // The base snapshots must be taken from the start, whether or not
+            // resolving is switched on — otherwise the first conflict has no base.
+            // Hooks are re-checked every tick (the sync plugin may load after us).
+            this.conflicts?.installHooks();
+            this.registerInterval(window.setInterval(() => void this.conflicts?.tick(), 30_000));
         });
     }
 
@@ -54,7 +67,7 @@ export default class McpBridgePlugin extends Plugin {
 
         if (!this.settings.enabled) return;
 
-        const server = new BridgeHttpServer(this.app, this.settings);
+        const server = new BridgeHttpServer(this.app, this.settings, this.conflicts);
         try {
             await server.start();
             this.server = server;

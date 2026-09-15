@@ -14,15 +14,20 @@ const stubObsidian = {
     },
 };
 
-await esbuild.build({
-    entryPoints: ['test/smoke.ts'],
-    bundle: true,
-    format: 'cjs',
-    platform: 'node',
-    target: 'es2022',
-    define: { __PLUGIN_VERSION__: JSON.stringify(version) },
-    external: [...builtins, ...builtins.map((b) => `node:${b}`)],
-    plugins: [stubObsidian],
-    outfile: 'test/.smoke.cjs',
-    logLevel: 'warning',
-});
+for (const [entry, out] of [
+    ['test/smoke.ts', 'test/.smoke.cjs'],
+    ['test/conflicts.ts', 'test/.conflicts.cjs'],
+]) {
+    await esbuild.build({
+        entryPoints: [entry],
+        bundle: true,
+        format: 'cjs',
+        platform: 'node',
+        target: 'es2022',
+        define: { __PLUGIN_VERSION__: JSON.stringify(version) },
+        external: [...builtins, ...builtins.map((b) => `node:${b}`)],
+        plugins: [stubObsidian],
+        outfile: out,
+        logLevel: 'warning',
+    });
+}

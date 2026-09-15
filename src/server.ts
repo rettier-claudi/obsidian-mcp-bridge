@@ -23,6 +23,7 @@ import { timingSafeEqual } from 'crypto';
 import { Buffer } from 'buffer';
 import type { App } from 'obsidian';
 import { ActionError, completeTask, renameFile } from './actions';
+import type { ConflictResolver } from './conflicts';
 import type { McpBridgeSettings } from './settings';
 
 const SERVER_NAME = 'obsidian-mcp-bridge';
@@ -85,9 +86,24 @@ const TOOLS = [
             required: ['from', 'to'],
         },
     },
+    {
+        name: 'sync_conflicts',
+        description:
+            'Show notes Fast Note Sync currently holds as conflicted on this instance, plus the ' +
+            'resolver\'s recent results. With resolve=true, resolve them now (three-way merge ' +
+            'against the last synced version; where both sides changed the same lines the server ' +
+            'wins; without a known base the server version is taken) — this writes the notes and ' +
+            'sends them to the sync server, also when automatic resolving is switched off.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                resolve: { type: 'boolean', description: 'Resolve now instead of only listing. Default false.' },
+            },
+        },
+    },
 ];
 
-function buildMcpServer(app: App, settings: McpBridgeSettings): Server {
+function buildMcpServer(app: App, settings: McpBridgeSettings, conflicts: ConflictResolver | null): Server {
     const server = new Server(
         { name: SERVER_NAME, version: SERVER_VERSION },
         {
@@ -122,6 +138,11 @@ function buildMcpServer(app: App, settings: McpBridgeSettings): Server {
                     }
                     const result = await renameFile(app, args.from, args.to);
                     return ok(result);
+                }
+                case 'sync_conflicts': {
+                    if (!conflicts) throw new ActionError('conflict resolver not available');
+                    const resolved = args.resolve === true ? await conflicts.tick(true) : undefined;
+                    return ok({ ...(resolved ? { resolved } : {}), status: conflicts.status() });
                 }
                 default:
                     throw new ActionError(`Unknown tool: ${request.params.name}`);
@@ -185,6 +206,7 @@ export class BridgeHttpServer {
     constructor(
         private readonly app: App,
         private readonly settings: McpBridgeSettings,
+        private readonly conflicts: ConflictResolver | null = null,
     ) {}
 
     get listening(): boolean {
@@ -268,7 +290,7 @@ export class BridgeHttpServer {
             return;
         }
 
-        const server = buildMcpServer(this.app, this.settings);
+        const server = buildMcpServer(this.app, this.settings, this.conflicts);
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
             enableJsonResponse: true,

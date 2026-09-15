@@ -186,7 +186,7 @@ async function main() {
 
     const list = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const names = (list.json?.result?.tools ?? []).map((t: any) => t.name).sort();
-    check('tools/list returns exactly the two tools', JSON.stringify(names) === '["complete_task","rename_file"]', names);
+    check('tools/list returns exactly the three tools', JSON.stringify(names) === '["complete_task","rename_file","sync_conflicts"]', names);
 
     // Documents what a curl/requests caller must send. The Streamable HTTP spec
     // wants both media types in Accept even when the answer comes back as JSON.

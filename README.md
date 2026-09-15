@@ -4,7 +4,8 @@ An Obsidian plugin that serves a small MCP server over Streamable HTTP, so scrip
 and automations outside Obsidian can act **through the running app** instead of
 editing Markdown with regexes.
 
-Two tools, nothing else: `complete_task` and `rename_file`.
+Three tools: `complete_task`, `rename_file`, and `sync_conflicts` — the last one
+belongs to the optional Fast Note Sync conflict resolver (see "Sync conflicts").
 
 ## Why
 
@@ -238,6 +239,60 @@ unique, line is not a task) come back as `isError: true` with
 Works for folders too. Missing parent folders are created. It refuses to overwrite
 an existing target.
 
+### `sync_conflicts`
+
+```json
+{"name":"sync_conflicts","arguments":{"resolve":true}}
+```
+
+Lists the notes Fast Note Sync holds as conflicted on this instance, the
+resolver's state and its recent results. `resolve: true` resolves them right away
+(even with the automatic resolver switched off). Without arguments it only reads.
+
+## Sync conflicts (Fast Note Sync on headless instances)
+
+Off by default; switch on with *Resolve Fast Note Sync conflicts automatically*
+(`resolveSyncConflicts` in `data.json`). Meant for Obsidian running under Xvfb,
+where nobody can click the sync plugin's conflict dialog. Code and reasoning:
+`src/conflicts.ts`.
+
+**The failure it fixes** (Fast Note Sync plugin 2.4.0 / server 3.6.1, both latest
+as of 2026-09-15): when a server push arrives for a note with an unsynced local
+edit, the plugin puts the note into `conflictedPaths` and from then on skips every
+push for it. The flag is persisted and only the dialog clears it. At the next sync
+round (restart, reconnect) the frozen copy is sent up, and with the default
+strategy the server writes it without comparison. In the homelab this brought
+ticked-off tasks back after six hours (2026-09-15); on 2026-09-14 it overwrote
+calendar reschedules.
+
+**What the resolver does**, every 30 s:
+
+- remote = the server's current version (`GET /api/note`), or the last skipped push
+  from `conflict-notes/*.remote.md` if the server is unreachable;
+- base = the version this client last had in sync. The plugin keeps only its hash,
+  so the bridge wraps `fileHashManager.setFileHash` (and `websocket.SendMessage` for
+  the uploaded text) and files a copy in `sync-base/` in this plugin's folder; if
+  that is missing, the server's note history is searched for the hash (history
+  records hold the text *before* each version; 100 are kept);
+- local unchanged since base → take the server's version; server unchanged →
+  keep local; otherwise a line merge. A stretch of base lines only one side changed
+  goes to that side, **adjacent changes are not conflicts** (plain diff3 would give
+  them to the server — in a task list that is the normal case). Where both sides
+  changed the same base lines or inserted at the same spot, the server wins that
+  stretch. No base found → the whole note from the server;
+- the result is written and sent with `isConflictResolved`, like the dialog's
+  button; flag and `conflict-notes` files are cleared. If the result equals the
+  server's version nothing is sent. It never writes an empty note over content,
+  and it retries when the note or a newer push changed while it was working;
+- every result is a JSON line in `sync-conflicts.log` in this plugin's folder.
+
+If the sync plugin's internals change (a member is missing), it stops and says so
+in `sync_conflicts` → `status.missing` instead of guessing.
+
+**Residual gap:** a conflict that arises within the last 30 s before a restart can
+still be sent up by the sync plugin's startup round before the resolver's first
+tick — it is only as stale as those seconds, not hours.
+
 ## Behaviour worth knowing
 
 - **The new recurrence instance gets a fresh block anchor from this plugin, not
@@ -400,8 +455,10 @@ tasks. Item 10 below is from 2026-09-04, against Philipp's actual tDCS task.
 src/main.ts      plugin lifecycle, server start/stop
 src/server.ts    HTTP listener, token auth, MCP server + tool definitions
 src/actions.ts   the two vault operations
+src/conflicts.ts Fast Note Sync conflict resolver (three-way merge)
 src/settings.ts  settings tab
-test/            smoke test against a stubbed obsidian module
+test/            smoke test against a stubbed obsidian module, conflict resolver
+                 test against a fake sync plugin
 ```
 
 ## Licence

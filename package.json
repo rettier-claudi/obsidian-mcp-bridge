@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mcp-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Obsidian plugin exposing an MCP server (Streamable HTTP) for completing Tasks-plugin tasks and link-aware file renames.",
   "main": "main.js",
   "private": true,
@@ -8,13 +8,17 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
     "typecheck": "tsc --noEmit --skipLibCheck",
-    "test:smoke": "node test/build-smoke.mjs && node test/.smoke.cjs"
+    "test:smoke": "node test/build-smoke.mjs && node test/.smoke.cjs && node test/.conflicts.cjs"
   },
-  "keywords": ["obsidian", "mcp"],
+  "keywords": [
+    "obsidian",
+    "mcp"
+  ],
   "author": "Claudi <i+claudi@philipp.ninja>",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.27.1"
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "node-diff3": "3.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.19.2",

@@ -14,6 +14,13 @@ export interface McpBridgeSettings {
      * mismatch can be fixed in the UI instead of needing a new build.
      */
     toggleDoneCommandId: string;
+    /**
+     * Resolve Fast Note Sync conflicts automatically (three-way merge, server wins
+     * where both sides changed the same lines). Meant for headless instances, where
+     * nobody can click the plugin's conflict dialog — see src/conflicts.ts. Off by
+     * default: on a desktop with a person in front of it the dialog is the better tool.
+     */
+    resolveSyncConflicts: boolean;
 }
 
 export const DEFAULT_SETTINGS: McpBridgeSettings = {
@@ -22,6 +29,7 @@ export const DEFAULT_SETTINGS: McpBridgeSettings = {
     port: 27125,
     token: '',
     toggleDoneCommandId: 'obsidian-tasks-plugin:toggle-done',
+    resolveSyncConflicts: false,
 };
 
 export function generateToken(): string {
@@ -133,6 +141,20 @@ export class McpBridgeSettingTab extends PluginSettingTab {
                         this.plugin.settings.toggleDoneCommandId = v.trim() || DEFAULT_SETTINGS.toggleDoneCommandId;
                         await this.plugin.saveSettings();
                     }),
+            );
+
+        new Setting(containerEl)
+            .setName('Resolve Fast Note Sync conflicts automatically')
+            .setDesc(
+                'For headless instances. Every 30 s, notes Fast Note Sync holds as conflicted are ' +
+                    'merged three-way (base = last synced version) and sent; where both sides changed ' +
+                    'the same lines the server wins. Log: sync-conflicts.log in this plugin\'s folder.',
+            )
+            .addToggle((t) =>
+                t.setValue(this.plugin.settings.resolveSyncConflicts).onChange(async (v) => {
+                    this.plugin.settings.resolveSyncConflicts = v;
+                    await this.plugin.saveSettings();
+                }),
             );
 
         new Setting(containerEl)
